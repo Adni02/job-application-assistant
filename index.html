@@ -290,6 +290,113 @@
       background: #6366f1;
     }
 
+    /* ── Button states ── */
+    .btn:disabled {
+      opacity: .7;
+      cursor: not-allowed;
+      transform: none !important;
+      box-shadow: none !important;
+    }
+
+    @keyframes spin {
+      to { transform: rotate(360deg); }
+    }
+
+    .spinner {
+      width: 18px;
+      height: 18px;
+      border: 2.5px solid rgba(255,255,255,.3);
+      border-top-color: #fff;
+      border-radius: 50%;
+      animation: spin .7s linear infinite;
+    }
+
+    /* ── Status message ── */
+    .status-msg {
+      margin-top: 16px;
+      padding: 14px 18px;
+      border-radius: 12px;
+      font-size: .85rem;
+      line-height: 1.6;
+      animation: fadeInUp .4s ease-out;
+      display: none;
+    }
+
+    .status-msg.loading {
+      display: flex;
+      align-items: center;
+      gap: 10px;
+      background: #eef2ff;
+      color: #4338ca;
+      border: 1px solid #c7d2fe;
+    }
+
+    .status-msg.loading .spinner {
+      border-color: rgba(67, 56, 202, .2);
+      border-top-color: #4338ca;
+      flex-shrink: 0;
+    }
+
+    .status-msg.error {
+      display: block;
+      background: #fef2f2;
+      color: #991b1b;
+      border: 1px solid #fecaca;
+    }
+
+    .status-msg.success {
+      display: block;
+      background: #f0fdf4;
+      color: #166534;
+      border: 1px solid #bbf7d0;
+    }
+
+    .status-msg.success a {
+      display: inline-flex;
+      align-items: center;
+      gap: 5px;
+      color: #4f46e5;
+      font-weight: 600;
+      text-decoration: none;
+      margin-right: 16px;
+    }
+
+    .status-msg.success a:hover {
+      text-decoration: underline;
+    }
+
+    .result-links {
+      margin-top: 10px;
+      display: flex;
+      flex-wrap: wrap;
+      gap: 10px;
+    }
+
+    .result-links a {
+      display: inline-flex;
+      align-items: center;
+      gap: 6px;
+      padding: 8px 16px;
+      background: #4f46e5;
+      color: #fff;
+      font-size: .82rem;
+      font-weight: 600;
+      border-radius: 8px;
+      text-decoration: none;
+      transition: background .2s, transform .15s;
+    }
+
+    .result-links a:hover {
+      background: #4338ca;
+      transform: translateY(-1px);
+    }
+
+    .result-links a svg {
+      width: 14px;
+      height: 14px;
+      flex-shrink: 0;
+    }
+
     /* ── Footer ── */
     footer {
       flex-shrink: 0;
@@ -383,12 +490,15 @@
         />
       </div>
 
-      <button class="btn" type="button">
+      <button class="btn" type="button" id="generate-btn" onclick="handleGenerate()">
         <svg xmlns="http://www.w3.org/2000/svg" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" viewBox="0 0 24 24">
           <path d="M5 12h14"/><path d="m12 5 7 7-7 7"/>
         </svg>
         Generate CV &amp; Cover Letter
       </button>
+
+      <!-- Status / Result area -->
+      <div id="status" class="status-msg"></div>
 
       <p class="hint">
         Powered by Gemini AI &bull; Saves directly to your Google Drive
@@ -424,6 +534,93 @@
       &copy; 2026 &bull; v1.0
     </div>
   </footer>
+
+  <script>
+    // ╔══════════════════════════════════════════════════════════════╗
+    // ║  IMPORTANT: Replace this URL with your deployed GAS URL     ║
+    // ╚══════════════════════════════════════════════════════════════╝
+    const GAS_WEB_APP_URL = "YOUR_GOOGLE_APPS_SCRIPT_WEB_APP_URL_HERE";
+
+    const btnEl    = document.getElementById("generate-btn");
+    const inputEl  = document.getElementById("job-url");
+    const statusEl = document.getElementById("status");
+
+    const arrowIcon = `<svg xmlns="http://www.w3.org/2000/svg" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" viewBox="0 0 24 24"><path d="M5 12h14"/><path d="m12 5 7 7-7 7"/></svg>`;
+    const docIcon   = `<svg xmlns="http://www.w3.org/2000/svg" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" viewBox="0 0 24 24"><path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z"/><polyline points="14 2 14 8 20 8"/><line x1="16" y1="13" x2="8" y2="13"/><line x1="16" y1="17" x2="8" y2="17"/><polyline points="10 9 9 9 8 9"/></svg>`;
+
+    function setStatus(type, html) {
+      statusEl.className = "status-msg " + type;
+      statusEl.innerHTML = html;
+    }
+
+    function setBtnLoading(loading) {
+      if (loading) {
+        btnEl.disabled = true;
+        btnEl.innerHTML = `<div class="spinner"></div> Generating — please wait…`;
+      } else {
+        btnEl.disabled = false;
+        btnEl.innerHTML = arrowIcon + " Generate CV &amp; Cover Letter";
+      }
+    }
+
+    async function handleGenerate() {
+      const url = inputEl.value.trim();
+
+      // Validate
+      if (!url) {
+        setStatus("error", "Please paste a job description URL above.");
+        inputEl.focus();
+        return;
+      }
+      if (!/^https?:\/\/.+/i.test(url)) {
+        setStatus("error", "That doesn't look like a valid URL. Include https://");
+        inputEl.focus();
+        return;
+      }
+      if (GAS_WEB_APP_URL.includes("YOUR_GOOGLE")) {
+        setStatus("error", "The Apps Script URL hasn't been configured yet. See the setup instructions.");
+        return;
+      }
+
+      // Start loading
+      setBtnLoading(true);
+      setStatus("loading", `<div class="spinner"></div> Analysing job posting &amp; generating documents… This may take up to a minute.`);
+
+      try {
+        const resp = await fetch(GAS_WEB_APP_URL, {
+          method: "POST",
+          headers: { "Content-Type": "text/plain;charset=utf-8" },
+          body: JSON.stringify({ url }),
+          redirect: "follow"
+        });
+
+        const data = await resp.json();
+
+        if (data.success) {
+          const d = data.data;
+          setStatus("success",
+            `<strong>✓ Documents generated for "${d.role}"</strong>
+             <div class="result-links">
+               <a href="${d.cvUrl}" target="_blank" rel="noopener">${docIcon} Open Tailored CV</a>
+               <a href="${d.coverLetterUrl}" target="_blank" rel="noopener">${docIcon} Open Cover Letter</a>
+             </div>`
+          );
+        } else {
+          setStatus("error", "⚠ " + (data.error || "Something went wrong. Please try again."));
+        }
+      } catch (err) {
+        console.error(err);
+        setStatus("error", "⚠ Network error — could not reach the server. Check your connection and try again.");
+      } finally {
+        setBtnLoading(false);
+      }
+    }
+
+    // Allow Enter key to submit
+    inputEl.addEventListener("keydown", function(e) {
+      if (e.key === "Enter") handleGenerate();
+    });
+  </script>
 
 </body>
 </html>
