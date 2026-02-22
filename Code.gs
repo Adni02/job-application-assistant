@@ -26,35 +26,24 @@ function doPost(e) {
   try {
     // 1. Parse input
     var body = JSON.parse(e.postData.contents);
-    var jobUrl = (body.url || "").trim();
-
-    if (!jobUrl) {
-      return _jsonResponse({ success: false, error: "No URL provided." });
+    var jdText = (body.jd || "").trim();
+    if (!jdText || jdText.length < 30) {
+      return _jsonResponse({ success: false, error: "No job description text provided." });
     }
 
-    if (!/^https?:\/\/.+/i.test(jobUrl)) {
-      return _jsonResponse({ success: false, error: "Invalid URL format." });
-    }
-
-    // 2. Extract job description text from the URL
-    var jobText = extractJobDescription(jobUrl);
-    if (!jobText || jobText.length < 50) {
-      return _jsonResponse({
-        success: false,
-        error: "Could not extract meaningful text from the URL. The site may block automated access."
-      });
-    }
+    // 2. Extract concise signals from JD using Gemini
+    var signals = extractJDSignals(jdText);
 
     // 3. Read base CV
     var cvText = getBaseCvText();
 
-    // 4. Call Gemini AI
-    var aiResult = callGemini(jobText, cvText);
+    // 4. Call Gemini AI for CV/cover letter, passing signals and CV
+    var aiResult = callGeminiWithSignals(signals, cvText);
 
     // 5. Save generated docs to Google Drive
     var props = PropertiesService.getScriptProperties();
     var folderId = props.getProperty("OUTPUT_FOLDER_ID");
-    var roleName = aiResult.roleName || "Job Application";
+    var roleName = signals.t || aiResult.roleName || "Job Application";
 
     var cvDocUrl = saveToGoogleDrive(
       "Tailored CV — " + roleName,
@@ -74,7 +63,8 @@ function doPost(e) {
       data: {
         role: roleName,
         cvUrl: cvDocUrl,
-        coverLetterUrl: clDocUrl
+        coverLetterUrl: clDocUrl,
+        signals: signals // include signals for debugging
       }
     });
 
@@ -169,66 +159,62 @@ function getBaseCvText() {
 /* ---------- Gemini AI ---------- */
 
 /**
- * Calls Gemini 2.5 Flash to generate a tailored CV and cover letter.
- * @param {string} jobDescription - extracted job posting text
- * @param {string} cvText - the user's base CV text
- * @returns {Object} { roleName, tailoredCv, coverLetter }
+ * Calls Gemini to extract concise hiring signals from JD text.
+ * Returns minified JSON with keys: c, t, rt, p, mh, nh, r, kpi, ats
  */
-function callGemini(jobDescription, cvText) {
-  var props = PropertiesService.getScriptProperties();
-  var apiKey = props.getProperty("GEMINI_API_KEY");
+function extractJDSignals(jdText) {
+  var apiKey = PropertiesService.getScriptProperties().getProperty("GEMINI_API_KEY");
+  if (!apiKey) throw new Error("GEMINI_API_KEY is not set in Script Properties.");
 
-  if (!apiKey) {
-    throw new Error("GEMINI_API_KEY is not set in Script Properties.");
-  }
+  var endpoint = "https://generativelanguage.googleapis.com/v1beta/models/gemini-2.5-flash:generateContent?key=" + apiKey;
 
-  var model = "gemini-2.5-flash";
-  var endpoint = "https://generativelanguage.googleapis.com/v1beta/models/"
-    + model + ":generateContent?key=" + apiKey;
-
-  var systemPrompt = [
-    "You are a professional career consultant and CV writer.",
-    "Your job is to tailor a candidate's existing CV and write a compelling cover letter",
-    "to perfectly match a given job description.",
-    "",
-    "RULES:",
-    "- Preserve all factual information from the original CV (dates, companies, degrees).",
-    "- Reorder, rephrase, and emphasise bullet points to align with the job requirements.",
-    "- Add relevant keywords from the job description naturally.",
-    "- The cover letter should be formal, concise (max 400 words), and addressed to 'Hiring Manager'.",
-    "- Do NOT invent experience or skills the candidate does not have.",
-    "",
-    "IMPORTANT: Respond ONLY with valid JSON — no markdown, no code fences, no extra text.",
-    "The JSON must have exactly these three keys:",
-    '  "roleName" — a short name for the role (e.g. "Senior Data Engineer at Google")',
-    '  "tailoredCv" — the full tailored CV as plain text with line breaks',
-    '  "coverLetter" — the full cover letter as plain text with line breaks'
+  var systemInstruction = [
+    "You are an expert CV tailoring assistant. Extract concise hiring signals from a job description for targeted resume optimization. Output ONLY valid minified JSON, no markdown, no explanations. Use EXACT keys and structure:",
+    '{"c":"","t":"","rt":"","p":[],"mh":[],"nh":[],"r":[],"kpi":[],"ats":[]}',
+    "FIELD RULES:",
+    "- c: company name (\"\" if not present)",
+    "- t: role/job title",
+    "- rt: short role type classification (e.g., 'Technical Product Owner – E-Invoicing')",
+    "- p: ranked top 5 hiring priorities (max 5, most important first)",
+    "- mh: must-have skills/knowledge (max 10)",
+    "- nh: nice-to-have skills/tools (max 7)",
+    "- r: core responsibilities (max 7, start with strong verbs)",
+    "- kpi: success metrics (max 6). If none explicit, infer up to 3 likely KPIs based on the JD (keep generic but role-specific).",
+    "- ats: ATS keywords (max 30). Include standards, tools, platforms, protocols, domain terms. Exclude generic soft skills.",
+    "CONCISENESS RULES:",
+    "- Each list item must be <= 8 words.",
+    "- Deduplicate and normalize terms (e.g., 'EN16931' -> 'EN 16931'; 'PEPPOL BIS' keep as is).",
+    "- Do NOT include location, hybrid policy, benefits, contact person, or marketing text.",
+    "- Avoid filler words (e.g., 'collaboration', 'ownership') unless explicitly a requirement."
   ].join("\n");
 
   var userPrompt = [
-    "=== CANDIDATE'S CURRENT CV ===",
-    cvText,
-    "",
-    "=== JOB DESCRIPTION ===",
-    jobDescription,
-    "",
-    "Now generate the tailored CV and cover letter. Respond with JSON only."
+    "Extract concise hiring signals from the following job description. Output ONLY valid minified JSON with the exact keys and structure specified. No explanations.",
+    "=== JD START ===",
+    jdText,
+    "=== JD END ==="
   ].join("\n");
 
   var payload = {
-    systemInstruction: { parts: [{ text: systemPrompt }] },
+    systemInstruction: { parts: [{ text: systemInstruction }] },
     contents: [{ parts: [{ text: userPrompt }] }],
     generationConfig: {
-      temperature: 0.7,
+      temperature: 0.2,
       responseMimeType: "application/json",
       responseSchema: {
         type: "OBJECT",
         properties: {
-          roleName: { type: "STRING" },
-          tailoredCv: { type: "STRING" },
-          coverLetter: { type: "STRING" }
+          c: { type: "STRING" },
+          t: { type: "STRING" },
+          rt: { type: "STRING" },
+          p: { type: "ARRAY", items: { type: "STRING" } },
+          mh: { type: "ARRAY", items: { type: "STRING" } },
+          nh: { type: "ARRAY", items: { type: "STRING" } },
+          r: { type: "ARRAY", items: { type: "STRING" } },
+          kpi: { type: "ARRAY", items: { type: "STRING" } },
+          ats: { type: "ARRAY", items: { type: "STRING" } }
         },
-        required: ["roleName", "tailoredCv", "coverLetter"]
+        required: ["c", "t", "rt", "p", "mh", "nh", "r", "kpi", "ats"]
       }
     }
   };
@@ -249,9 +235,75 @@ function callGemini(jobDescription, cvText) {
     throw new Error(errMsg);
   }
 
-  // Extract the generated text from Gemini response
-  var generatedText = body.candidates[0].content.parts[0].text;
-  var result = JSON.parse(generatedText);
+  var resultText = body.candidates[0].content.parts[0].text;
+  var signals = JSON.parse(resultText);
+  return signals;
+}
+
+/**
+ * Calls Gemini to generate tailored CV and cover letter using signals and CV text.
+ * @param {Object} signals - concise JD signals
+ * @param {string} cvText - base CV text
+ * @returns {Object} { tailoredCv, coverLetter }
+ */
+function callGeminiWithSignals(signals, cvText) {
+  var apiKey = PropertiesService.getScriptProperties().getProperty("GEMINI_API_KEY");
+  if (!apiKey) throw new Error("GEMINI_API_KEY is not set in Script Properties.");
+
+  var endpoint = "https://generativelanguage.googleapis.com/v1beta/models/gemini-2.5-flash:generateContent?key=" + apiKey;
+
+  var systemPrompt = [
+    "You are a professional CV and cover letter writer.",
+    "Use the provided concise hiring signals and candidate CV to generate a tailored CV and cover letter.",
+    "Focus ONLY on the signals provided. Do not add unrelated content.",
+    "Respond ONLY with valid JSON: {tailoredCv, coverLetter}"
+  ].join("\n");
+
+  var userPrompt = [
+    "=== HIRING SIGNALS ===",
+    JSON.stringify(signals),
+    "",
+    "=== CANDIDATE CV ===",
+    cvText,
+    "",
+    "Generate a tailored CV and cover letter for this role. Respond with JSON only."
+  ].join("\n");
+
+  var payload = {
+    systemInstruction: { parts: [{ text: systemPrompt }] },
+    contents: [{ parts: [{ text: userPrompt }] }],
+    generationConfig: {
+      temperature: 0.6,
+      responseMimeType: "application/json",
+      responseSchema: {
+        type: "OBJECT",
+        properties: {
+          tailoredCv: { type: "STRING" },
+          coverLetter: { type: "STRING" }
+        },
+        required: ["tailoredCv", "coverLetter"]
+      }
+    }
+  };
+
+  var options = {
+    method: "post",
+    contentType: "application/json",
+    payload: JSON.stringify(payload),
+    muteHttpExceptions: true
+  };
+
+  var response = UrlFetchApp.fetch(endpoint, options);
+  var code = response.getResponseCode();
+  var body = JSON.parse(response.getContentText());
+
+  if (code !== 200) {
+    var errMsg = (body.error && body.error.message) || "Gemini API error (HTTP " + code + ")";
+    throw new Error(errMsg);
+  }
+
+  var resultText = body.candidates[0].content.parts[0].text;
+  var result = JSON.parse(resultText);
 
   if (!result.tailoredCv || !result.coverLetter) {
     throw new Error("Gemini returned an incomplete response.");
@@ -323,13 +375,13 @@ function _jsonResponse(obj) {
 
 /**
  * Run this from the Apps Script editor to test end-to-end
- * without deploying. Replace the URL with a real job posting.
+ * without deploying. Replace the JD text with a real job description.
  */
 function testDoPost() {
   var mockEvent = {
     postData: {
       contents: JSON.stringify({
-        url: "https://example.com/careers/software-engineer"
+        jd: "Senior Software Engineer\n\nWe are seeking a Senior Software Engineer to join our team. Responsibilities include designing scalable systems, collaborating with cross-functional teams, and ensuring code quality. Must have experience with cloud platforms, REST APIs, and agile methodologies. Nice-to-have: DevOps tools, machine learning exposure. Success measured by project delivery, code quality, and system uptime."
       })
     }
   };
