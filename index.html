@@ -477,17 +477,18 @@
     <div class="card">
       <div class="card-badge"><span>🤖</span> AI-Powered</div>
 
-      <label for="job-url">Paste here the job description URL</label>
+      <label for="job-jd">Paste the job description text below</label>
 
       <div class="input-wrap">
-        <span class="input-prefix">🔗</span>
-        <input
-          id="job-url"
-          type="url"
-          placeholder="https://example.com/jobs/software-engineer"
+        <span class="input-prefix">📝</span>
+        <textarea
+          id="job-jd"
+          rows="8"
+          placeholder="Paste the full job description here..."
           spellcheck="false"
           autocomplete="off"
-        />
+          style="resize:vertical; width:100%; border:none; background:transparent; color:#1e293b; font-size:.95rem; font-family:inherit; padding:15px 16px 15px 0;"
+        ></textarea>
       </div>
 
       <button class="btn" type="button" id="generate-btn" onclick="handleGenerate()">
@@ -542,7 +543,7 @@
     const GAS_WEB_APP_URL = "https://script.google.com/macros/s/AKfycbxRvO66Dy6PswygJ97dOB1SWxDnni5FYqnoeTYFvf8KhzCRmrO9bcL115-IMsRRLtsJ/exec";
 
     const btnEl    = document.getElementById("generate-btn");
-    const inputEl  = document.getElementById("job-url");
+    const inputEl  = document.getElementById("job-jd");
     const statusEl = document.getElementById("status");
 
     const arrowIcon = `<svg xmlns="http://www.w3.org/2000/svg" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" viewBox="0 0 24 24"><path d="M5 12h14"/><path d="m12 5 7 7-7 7"/></svg>`;
@@ -564,16 +565,16 @@
     }
 
     async function handleGenerate() {
-      const url = inputEl.value.trim();
+      const jdText = inputEl.value.trim();
 
       // Validate
-      if (!url) {
-        setStatus("error", "Please paste a job description URL above.");
+      if (!jdText) {
+        setStatus("error", "Please paste the job description text above.");
         inputEl.focus();
         return;
       }
-      if (!/^https?:\/\/.+/i.test(url)) {
-        setStatus("error", "That doesn't look like a valid URL. Include https://");
+      if (jdText.length < 30) {
+        setStatus("error", "Job description is too short. Paste the full text.");
         inputEl.focus();
         return;
       }
@@ -584,13 +585,13 @@
 
       // Start loading
       setBtnLoading(true);
-      setStatus("loading", `<div class="spinner"></div> Analysing job posting &amp; generating documents… This may take up to a minute.`);
+      setStatus("loading", `<div class="spinner"></div> Analysing job description &amp; generating documents… This may take up to a minute.`);
 
       try {
         const resp = await fetch(GAS_WEB_APP_URL, {
           method: "POST",
           headers: { "Content-Type": "text/plain;charset=utf-8" },
-          body: JSON.stringify({ url }),
+          body: JSON.stringify({ jd: jdText }),
           redirect: "follow"
         });
 
@@ -616,9 +617,9 @@
       }
     }
 
-    // Allow Enter key to submit
+    // Allow Enter+Cmd to submit
     inputEl.addEventListener("keydown", function(e) {
-      if (e.key === "Enter") handleGenerate();
+      if ((e.key === "Enter" && (e.metaKey || e.ctrlKey))) handleGenerate();
     });
   </script>
 
