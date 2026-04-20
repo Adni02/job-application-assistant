@@ -1,0 +1,107 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Govinda Prasad CV</title>
+  <style>
+    body {
+      font-family: "Aptos", "Calibri", sans-serif;
+      color: #111;
+      max-width: 820px;
+      margin: 24px auto;
+      padding: 0 24px 32px;
+      line-height: 1.35;
+      font-size: 14px;
+    }
+
+    h1 {
+      margin: 0;
+      font-size: 28px;
+      letter-spacing: 0.02em;
+    }
+
+    .contact {
+      margin: 6px 0 18px;
+      color: #444;
+      font-size: 13px;
+    }
+
+    .section-title {
+      margin: 20px 0 8px;
+      padding-bottom: 4px;
+      border-bottom: 1px solid #153d63;
+      color: #153d63;
+      font-size: 15px;
+      font-weight: 700;
+      text-transform: uppercase;
+    }
+
+    .summary-line,
+    .role-meta,
+    .education-line,
+    .cert-line {
+      margin: 0 0 6px;
+    }
+
+    .role-title {
+      margin: 14px 0 2px;
+      color: #153d63;
+      font-weight: 700;
+      text-decoration: underline;
+    }
+
+    ul {
+      margin: 6px 0 10px 20px;
+      padding: 0;
+    }
+
+    li {
+      margin: 0 0 5px;
+    }
+  </style>
+</head>
+<body>
+  <h1>Govinda Prasad</h1>
+  <div class="contact">
+    Replace this line with your fixed contact details in the template file.
+  </div>
+
+  <div class="section-title">Professional Summary</div>
+  {{SUMMARY_HTML}}
+
+  <div class="section-title">Skills</div>
+  <ul>
+    {{SKILLS_HTML}}
+  </ul>
+
+  <div class="section-title">Experience</div>
+
+  <div class="role-title">Business Analyst</div>
+  <p class="role-meta">Story House Egmont, Copenhagen, Denmark, Jan 2022 - Mar 2024</p>
+  <ul>
+    {{BUSINESS_ANALYST_BULLETS_HTML}}
+  </ul>
+
+  <div class="role-title">Strategy Consultant</div>
+  <p class="role-meta">SAS Institute, Copenhagen, Denmark, Apr 2021 - Sep 2021</p>
+  <ul>
+    {{STRATEGY_CONSULTANT_BULLETS_HTML}}
+  </ul>
+
+  <div class="role-title">Operations &amp; Strategy Manager</div>
+  <p class="role-meta">Indian Army, Delhi, India, Sep 2009 - Aug 2019</p>
+  <ul>
+    {{OPERATIONS_STRATEGY_MANAGER_BULLETS_HTML}}
+  </ul>
+
+  <div class="section-title">Certifications</div>
+  <p class="cert-line">Microsoft Certifications: Power BI Data Analyst Associate (PL-300), Azure AI Fundamentals (AI-900), Azure Data Fundamentals (DP-900), AI Transformation Leader (AB-731)</p>
+  <p class="cert-line">Project Management: PRINCE2 Agile, CSPO, CSM, IBM Enterprise Design Thinking Practitioner</p>
+
+  <div class="section-title">Education</div>
+  <p class="education-line">MBA, Copenhagen Business School, Denmark, 2020-2021</p>
+  <p class="education-line">(Led the winning team at Denmark-level VCIC; represented at European finals and secured 3rd place)</p>
+  <p class="education-line">Bachelor in Engineering (Mechanical), University of Pune, India, 2005-2009</p>
+</body>
+</html>

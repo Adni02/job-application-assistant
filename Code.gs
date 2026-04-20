@@ -1,88 +1,77 @@
-// ═══════════════════════════════════════════════════════════════════
-//  Job Application Assistant — Google Apps Script (JD text input)
-//  ---------------------------------------------------------------
-//  Script Properties (Project Settings → Script Properties):
-//    GEMINI_API_KEY    — Gemini API key
-//    CV_DOC_ID         — Google Doc ID of base CV
-//    OUTPUT_FOLDER_ID  — Google Drive folder ID for outputs (optional)
-// ═══════════════════════════════════════════════════════════════════
+// Job Application Assistant - Google Apps Script
+//
+// Script Properties:
+//   GEMINI_API_KEY       Gemini API key
+//   OUTPUT_FOLDER_ID     Google Drive folder ID for outputs (optional)
+//   CV_TEMPLATE_FILE_ID  Optional Google Drive HTML file to use as CV template
 
-function doGet(e) {
+var SOURCE_CONTENT = {
+  summary:
+    "Senior Business Analyst with 10+ years of experience driving data-driven transformation, automation, and AI-enabled decision-making across IT, media, and supply chain domains. Proven track record of replacing manual processes with scalable solutions using Python, Power platform, and cloud technologies, delivering ~$460K savings and operational efficiency gains. Skilled in leading stakeholders, defining product requirements, and leveraging AI to streamline workflows and enhance business outcomes.",
+  skillLines: {
+    skillLine1: "Business Analysis: Requirements Gathering, BRD, Stakeholder Management, UAT, Agile/Scrum",
+    skillLine2: "Data & Analytics: Power BI (DAX, Power Query), SQL, Advanced Excel, Tableau, Looker",
+    skillLine3: "Automation & Tools: Python, Power Apps, Power Automate, Azure Functions, Jira, Confluence",
+    skillLine4: "AI & Cloud: RAG, Prompt Engineering, Azure AI, Azure, Google Cloud",
+    skillLine5: "ERP & Systems: SAP, Microsoft Dynamics 365 Business Central"
+  },
+  businessAnalystBullets: [
+    "Led digital transformation across 6 business units, partnering with 20+ stakeholders to replace 15+ Excel-based processes with Python solutions, delivering ~$460K in cost savings.",
+    "Gathered and translated 30+ business requirements into functional solutions, working with engineering teams in Agile delivery.",
+    "Developed 8 Power BI dashboards used by 40+ stakeholders, eliminating manual reporting and saving 40+ hours per week.",
+    "Automated 10+ business processes using Power Platform and Azure Functions, saving 120+ hours per month.",
+    "Facilitated UAT and stakeholder workshops to ensure alignment between business and technical team.",
+    "Delivered sustainability analytics for leadership decision-making, contributing to a 15% reduction in annual carbon footprint."
+  ],
+  fixedFacts: [
+    "Keep the content as short as possible.",
+    "Use the same numbers already present as metrics and do not invent new numbers."
+  ]
+};
+
+function doGet() {
   return _jsonResponse({ success: true, message: "Job Application Assistant API is running." });
 }
 
-/**
- * POST body should contain JSON string, ideally sent as text/plain from browser:
- * { "jd": "...." }
- */
 function doPost(e) {
   try {
     var raw = (e && e.postData && e.postData.contents) ? e.postData.contents : "";
     if (!raw) return _jsonResponse({ success: false, error: "No request body provided." });
 
-    // Accept both:
-    // - text/plain containing JSON
-    // - application/json containing JSON
     var body = _safeJsonParse(raw);
     if (!body) return _jsonResponse({ success: false, error: "Request body must be valid JSON." });
 
-    var jdText = (body.jd || "").trim();
-    if (!jdText || jdText.length < 30) {
+    var jdText = String(body.jd || "").trim();
+    if (jdText.length < 30) {
       return _jsonResponse({ success: false, error: "No job description text provided (min 30 chars)." });
     }
 
-    // 1) Extract concise signals from JD
     var signals = extractJDSignals(jdText);
+    var tailored = callGeminiForTemplateSections(signals, SOURCE_CONTENT);
 
-    // 2) Read base CV
-    var cvText = getBaseCvText();
-
-    // 3) Generate tailored CV + cover letter
-    var aiResult = callGeminiWithSignals(signals, cvText);
-
-    // 4) Save to Drive
     var props = PropertiesService.getScriptProperties();
     var folderId = props.getProperty("OUTPUT_FOLDER_ID") || "";
     var roleName = (signals && signals.t) ? signals.t : "Job Application";
+    var fileToken = buildOutputFileToken(signals);
 
-    var cvDocUrl = saveToGoogleDrive("Tailored CV — " + roleName, aiResult.tailoredCv, folderId);
-    var clDocUrl = saveToGoogleDrive("Cover Letter — " + roleName, aiResult.coverLetter, folderId);
+    var renderedCvHtml = renderCvTemplate(tailored, signals);
+    var cvUrl = savePdfToGoogleDrive("Govinda (CV) " + fileToken, renderedCvHtml, folderId);
+    var coverLetterUrl = savePlainTextDocToGoogleDrive("Govinda (CL) " + fileToken, tailored.coverLetter, folderId);
 
     return _jsonResponse({
       success: true,
       data: {
         role: roleName,
-        cvUrl: cvDocUrl,
-        coverLetterUrl: clDocUrl,
-        signals: signals // remove in production if you don't want to expose it
+        cvUrl: cvUrl,
+        coverLetterUrl: coverLetterUrl
       }
     });
-
   } catch (err) {
     console.error("doPost error:", err);
     return _jsonResponse({ success: false, error: err.message || "An unexpected error occurred." });
   }
 }
 
-/* ---------- CV reader ---------- */
-
-function getBaseCvText() {
-  var props = PropertiesService.getScriptProperties();
-  var docId = props.getProperty("CV_DOC_ID");
-  if (!docId) throw new Error("CV_DOC_ID is not set in Script Properties.");
-
-  var doc = DocumentApp.openById(docId);
-  var text = doc.getBody().getText();
-  if (!text || text.trim().length < 20) throw new Error("The base CV document appears to be empty.");
-  return text;
-}
-
-/* ---------- Gemini: JD -> concise signals ---------- */
-
-/**
- * Returns minified JSON:
- * {"c":"","t":"","rt":"","p":[],"mh":[],"nh":[],"r":[],"kpi":[],"ats":[]}
- */
 function extractJDSignals(jdText) {
   var apiKey = PropertiesService.getScriptProperties().getProperty("GEMINI_API_KEY");
   if (!apiKey) throw new Error("GEMINI_API_KEY is not set in Script Properties.");
@@ -95,18 +84,16 @@ function extractJDSignals(jdText) {
     "Extract concise hiring signals for CV tailoring.",
     "Return ONLY valid minified JSON with EXACT keys/structure:",
     '{"c":"","t":"","rt":"","p":[],"mh":[],"nh":[],"r":[],"kpi":[],"ats":[]}',
-    "",
     "Rules:",
     "- JSON only. No markdown. No commentary.",
     "- Each list item <= 8 words.",
-    "- Deduplicate + normalize terms (EN16931 -> EN 16931).",
-    "- Exclude location/hybrid/benefits/contact/marketing.",
-    "",
+    "- Deduplicate and normalize terms.",
+    "- Exclude location, hybrid policy, benefits, contact names, and marketing copy.",
     "Limits:",
-    "- p: max 5 ranked.",
-    "- mh: max 10; nh: max 7; r: max 7.",
-    "- kpi: max 6; if none explicit, infer up to 3.",
-    "- ats: max 30; include standards/tools/platforms/protocols/domain terms; avoid generic soft skills."
+    "- p max 5 ranked.",
+    "- mh max 10; nh max 7; r max 7.",
+    "- kpi max 6; infer up to 3 if not explicit.",
+    "- ats max 30; include tools, standards, platforms, protocols, and domain terms."
   ].join("\n");
 
   var payload = {
@@ -147,20 +134,19 @@ function extractJDSignals(jdText) {
     throw new Error(msg);
   }
 
-  var outText = body
-    && body.candidates
-    && body.candidates[0]
-    && body.candidates[0].content
-    && body.candidates[0].content.parts
-    && body.candidates[0].content.parts[0]
-    && body.candidates[0].content.parts[0].text;
+  var outText = body &&
+    body.candidates &&
+    body.candidates[0] &&
+    body.candidates[0].content &&
+    body.candidates[0].content.parts &&
+    body.candidates[0].content.parts[0] &&
+    body.candidates[0].content.parts[0].text;
 
   if (!outText) throw new Error("Gemini returned no JD signals output.");
 
   var signals = _safeJsonParse(outText);
   if (!signals) throw new Error("JD signals output was not valid JSON.");
 
-  // minimal normalization
   signals.c = signals.c || "";
   signals.t = signals.t || "";
   signals.rt = signals.rt || "";
@@ -174,9 +160,7 @@ function extractJDSignals(jdText) {
   return signals;
 }
 
-/* ---------- Gemini: signals + CV -> tailored docs ---------- */
-
-function callGeminiWithSignals(signals, cvText) {
+function callGeminiForTemplateSections(signals, sourceContent) {
   var apiKey = PropertiesService.getScriptProperties().getProperty("GEMINI_API_KEY");
   if (!apiKey) throw new Error("GEMINI_API_KEY is not set in Script Properties.");
 
@@ -185,40 +169,62 @@ function callGeminiWithSignals(signals, cvText) {
     encodeURIComponent(apiKey);
 
   var systemPrompt = [
-  "You are an ATS-focused CV strategist.",
-  "",
-  "Your task is to RESTRUCTURE and OPTIMISE the CV to maximise alignment with the hiring signals.",
-  "",
-  "STRICT RULES:",
-  "- Do NOT invent experience, tools, metrics, certifications, or roles.",
-  "- You may reorder sections and rewrite bullet points.",
-  "- Remove or de-emphasise content not aligned with the role.",
-  "- Every bullet in Experience must clearly support at least one hiring priority (signals.p or signals.mh).",
-  "- Use terminology from signals.ats when truthful.",
-  "- Optimise for ATS keyword density naturally.",
-  "- Prioritise impact and measurable outcomes if present in CV.",
-  "",
-  "STRUCTURE REQUIREMENTS:",
-  "1. Professional Summary (role-specific).",
-  "2. Core Skills section (derived only from signals.mh and supported CV content).",
-  "3. Experience:",
-  "   - 4–6 bullets per role.",
-  "   - Strong action verbs.",
-  "   - Rewritten to mirror signals.r and signals.p.",
-  "4. Education.",
-  "",
-  "Return ONLY JSON: { tailoredCv, coverLetter }"
-].join("\n");
+    "You are tailoring a fixed CV template.",
+    "You must update only these sections:",
+    "- professional summary",
+    "- 5 fixed skills lines",
+    "- bullet points under the existing Business Analyst entry",
+    "- cover letter",
+    "",
+    "STRICT RULES:",
+    "- Do not invent experience, employers, dates, degrees, tools, certifications, or metrics.",
+    "- Keep role titles, company names, dates, education, and certifications untouched in the final template.",
+    "- Do not generate or modify any job titles, company names, dates, education, certifications, or any non-target experience sections.",
+    "- Rewrite only the content requested below using facts already supported by the provided source sections.",
+    "- Prefer ATS-aligned wording from the hiring signals when truthful.",
+    "- Keep bullets concise and impact-oriented.",
+    "- Keep the content as short as possible.",
+    "- Reuse the same numbers already present in the source content when mentioning metrics.",
+    "- Do not invent new numbers or quantitative claims.",
+    "- Preserve the core truth of the fixed facts list.",
+    "",
+    "SKILL LINE KEYS:",
+    "- skillLine1 corresponds to Business Analysis",
+    "- skillLine2 corresponds to Data & Analytics",
+    "- skillLine3 corresponds to Automation & Tools",
+    "- skillLine4 corresponds to AI & Cloud",
+    "- skillLine5 corresponds to ERP & Systems",
+    "",
+    "Return JSON only."
+  ].join("\n");
 
   var userPrompt = [
     "HIRING_SIGNALS_JSON:",
     JSON.stringify(signals),
     "",
-    "CANDIDATE_CV:",
-    cvText,
+    "SOURCE_CONTENT_JSON:",
+    JSON.stringify(sourceContent),
     "",
-    "Write a tailored CV (plain text with line breaks) and a cover letter (<=350 words) addressed to Hiring Manager.",
-    "Return JSON only."
+    "Return JSON with this exact structure:",
+    JSON.stringify({
+      summary: ["2-3 short lines"],
+      skillLines: {
+        skillLine1: "Business Analysis: ...",
+        skillLine2: "Data & Analytics: ...",
+        skillLine3: "Automation & Tools: ...",
+        skillLine4: "AI & Cloud: ...",
+        skillLine5: "ERP & Systems: ..."
+      },
+      businessAnalystBullets: ["bullet"],
+      coverLetter: "plain text"
+    }),
+    "",
+    "Requirements:",
+    "- summary: 2 or 3 lines.",
+    "- skill lines: exactly 5 lines, keep the category labels shown above.",
+    "- each skill line should stay concise and ATS-relevant.",
+    "- businessAnalystBullets: 5 or 6 bullets.",
+    "- coverLetter: <= 350 words, plain text, professional."
   ].join("\n");
 
   var payload = {
@@ -230,10 +236,22 @@ function callGeminiWithSignals(signals, cvText) {
       responseSchema: {
         type: "OBJECT",
         properties: {
-          tailoredCv: { type: "STRING" },
+          summary: { type: "ARRAY", items: { type: "STRING" }, minItems: 2, maxItems: 3 },
+          skillLines: {
+            type: "OBJECT",
+            properties: {
+              skillLine1: { type: "STRING" },
+              skillLine2: { type: "STRING" },
+              skillLine3: { type: "STRING" },
+              skillLine4: { type: "STRING" },
+              skillLine5: { type: "STRING" }
+            },
+            required: ["skillLine1", "skillLine2", "skillLine3", "skillLine4", "skillLine5"]
+          },
+          businessAnalystBullets: { type: "ARRAY", items: { type: "STRING" }, minItems: 5, maxItems: 6 },
           coverLetter: { type: "STRING" }
         },
-        required: ["tailoredCv", "coverLetter"]
+        required: ["summary", "skillLines", "businessAnalystBullets", "coverLetter"]
       }
     }
   };
@@ -252,201 +270,221 @@ function callGeminiWithSignals(signals, cvText) {
     throw new Error(msg);
   }
 
-  var outText = body
-    && body.candidates
-    && body.candidates[0]
-    && body.candidates[0].content
-    && body.candidates[0].content.parts
-    && body.candidates[0].content.parts[0]
-    && body.candidates[0].content.parts[0].text;
+  var outText = body &&
+    body.candidates &&
+    body.candidates[0] &&
+    body.candidates[0].content &&
+    body.candidates[0].content.parts &&
+    body.candidates[0].content.parts[0] &&
+    body.candidates[0].content.parts[0].text;
 
-  if (!outText) throw new Error("Gemini returned no tailoring output.");
+  if (!outText) throw new Error("Gemini returned no template section output.");
 
   var result = _safeJsonParse(outText);
-  if (!result || !result.tailoredCv || !result.coverLetter) throw new Error("Gemini returned an incomplete response.");
+  if (!result) throw new Error("Gemini template response was not valid JSON.");
+
+  result.summary = Array.isArray(result.summary) ? result.summary : [];
+  result.skillLines = result.skillLines || {};
+  result.skillLines.skillLine1 = String(result.skillLines.skillLine1 || "").trim();
+  result.skillLines.skillLine2 = String(result.skillLines.skillLine2 || "").trim();
+  result.skillLines.skillLine3 = String(result.skillLines.skillLine3 || "").trim();
+  result.skillLines.skillLine4 = String(result.skillLines.skillLine4 || "").trim();
+  result.skillLines.skillLine5 = String(result.skillLines.skillLine5 || "").trim();
+  result.businessAnalystBullets = Array.isArray(result.businessAnalystBullets) ? result.businessAnalystBullets : [];
+  result.coverLetter = String(result.coverLetter || "").trim();
+
+  if (
+    !result.summary.length ||
+    !result.skillLines.skillLine1 ||
+    !result.skillLines.skillLine2 ||
+    !result.skillLines.skillLine3 ||
+    !result.skillLines.skillLine4 ||
+    !result.skillLines.skillLine5 ||
+    !result.businessAnalystBullets.length ||
+    !result.coverLetter
+  ) {
+    throw new Error("Gemini returned an incomplete template response.");
+  }
 
   return result;
 }
 
-/* ---------- Google Drive / Docs ---------- */
+function renderCvTemplate(tailored, signals) {
+  var templateHtml = getCvTemplateHtml();
+  var summaryHtml = renderParagraphs(tailored.summary);
+  var summaryText = tailored.summary.join(" ");
 
-function saveToGoogleDrive(title, content, folderId) {
+  var replacements = {
+    ROLE_TARGET: _escapeHtml(signals.t || ""),
+    SUMMARY_HTML: summaryHtml,
+    SUMMARY_TEXT: _escapeHtml(summaryText),
+    SKILL_LINE_1: _escapeHtml(tailored.skillLines.skillLine1),
+    SKILL_LINE_2: _escapeHtml(tailored.skillLines.skillLine2),
+    SKILL_LINE_3: _escapeHtml(tailored.skillLines.skillLine3),
+    SKILL_LINE_4: _escapeHtml(tailored.skillLines.skillLine4),
+    SKILL_LINE_5: _escapeHtml(tailored.skillLines.skillLine5),
+    BUSINESS_ANALYST_BULLETS_HTML: renderWordBulletParagraphs(tailored.businessAnalystBullets)
+  };
+
+  return templateHtml.replace(/\{\{([A-Z0-9_]+)\}\}/g, function(match, key) {
+    return Object.prototype.hasOwnProperty.call(replacements, key) ? replacements[key] : match;
+  });
+}
+
+function getCvTemplateHtml() {
+  var props = PropertiesService.getScriptProperties();
+  var templateFileId = props.getProperty("CV_TEMPLATE_FILE_ID");
+
+  if (templateFileId) {
+    return DriveApp.getFileById(templateFileId.trim()).getBlob().getDataAsString();
+  }
+
+  return HtmlService.createHtmlOutputFromFile("CvTemplate").getContent();
+}
+
+function renderParagraphs(lines) {
+  return (lines || [])
+    .filter(function(line) { return String(line || "").trim(); })
+    .map(function(line) {
+      return '<p class="summary-line">' + _escapeHtml(line) + '</p>';
+    })
+    .join("\n");
+}
+
+function renderBulletList(items) {
+  var safeItems = (items || []).filter(function(item) { return String(item || "").trim(); });
+  return safeItems
+    .map(function(item) {
+      return '<li>' + _escapeHtml(item) + '</li>';
+    })
+    .join("\n");
+}
+
+function renderWordBulletParagraphs(items) {
+  var safeItems = (items || []).filter(function(item) { return String(item || "").trim(); });
+  return safeItems
+    .map(function(item) {
+      return [
+        "<p style='margin-top:0cm;margin-right:0cm;margin-bottom:0cm;margin-left:7.1pt;",
+        "text-align:justify;text-justify:inter-ideograph;text-indent:-7.1pt;mso-list:",
+        "l21 level1 lfo12'><![if !supportLists]><span lang=EN-IN style='font-size:7.5pt;",
+        "font-family:Symbol;mso-fareast-font-family:Symbol;mso-bidi-font-family:Symbol;",
+        "color:black'><span style='mso-list:Ignore'> <span style='font:7.0pt \"Times New Roman\"'>&nbsp;",
+        "</span></span></span><![endif]><span dir=LTR></span><span lang=EN-IN",
+        "style='font-size:10.0pt;font-family:\"Aptos Light\",sans-serif;color:black;",
+        "mso-themecolor:text1'>" + _escapeHtml(item) + "<o:p></o:p></span></p>"
+      ].join("\n");
+    })
+    .join("\n\n");
+}
+
+function buildOutputFileToken(signals) {
+  var companyToken = abbreviateCompanyName((signals && signals.c) ? signals.c : "");
+  var dateToken = Utilities.formatDate(new Date(), Session.getScriptTimeZone(), "ddMM");
+  return companyToken + " " + dateToken;
+}
+
+function abbreviateCompanyName(companyName) {
+  var cleaned = String(companyName || "")
+    .replace(/&/g, " ")
+    .replace(/[^A-Za-z0-9 ]+/g, " ")
+    .replace(/\s+/g, " ")
+    .trim();
+
+  if (!cleaned) return "BA";
+
+  var words = cleaned.split(" ").filter(function(word) {
+    return word && !isCompanyStopWord(word);
+  });
+
+  if (!words.length) words = cleaned.split(" ");
+
+  var token = words.map(function(word) {
+    return word.charAt(0).toUpperCase();
+  }).join("");
+
+  if (token.length > 4) token = token.substring(0, 4);
+  if (!token) token = cleaned.replace(/\s+/g, "").substring(0, 3).toUpperCase();
+  if (!token) token = "BA";
+
+  return token;
+}
+
+function isCompanyStopWord(word) {
+  var stopWords = {
+    "and": true,
+    "the": true,
+    "of": true,
+    "for": true,
+    "group": true,
+    "company": true,
+    "co": true,
+    "corp": true,
+    "corporation": true,
+    "inc": true,
+    "incorporated": true,
+    "limited": true,
+    "ltd": true,
+    "llc": true,
+    "plc": true,
+    "ag": true,
+    "gmbh": true,
+    "sa": true,
+    "sas": true,
+    "as": true,
+    "aps": true
+  };
+
+  return !!stopWords[String(word || "").toLowerCase()];
+}
+
+function savePdfToGoogleDrive(title, htmlContent, folderId) {
+  var htmlFile = DriveApp.createFile(title + ".html", htmlContent, MimeType.HTML);
+  var pdfBlob = htmlFile.getBlob().getAs(MimeType.PDF).setName(title + ".pdf");
+  var pdfFile = DriveApp.createFile(pdfBlob);
+
+  if (folderId) {
+    var folder = DriveApp.getFolderById(folderId.trim());
+    pdfFile.moveTo(folder);
+  }
+
+  htmlFile.setTrashed(true);
+
+  return pdfFile.getUrl();
+}
+
+function savePlainTextDocToGoogleDrive(title, content, folderId) {
   var doc = DocumentApp.create(title);
   var body = doc.getBody();
   body.clear();
 
-  // Global style constants
-  var FONT = "Times New Roman";
-  var SIZE = 12;
-
-  // Helpers
-  function applyBodyStyle(par) {
-  var t = par.editAsText();
-  t.setFontFamily(FONT);
-  t.setFontSize(SIZE);
-
-  // ✅ IMPORTANT: reset inherited styles
-  t.setBold(false);
-  t.setUnderline(false);
-
-  par.setAlignment(DocumentApp.HorizontalAlignment.JUSTIFY);
-  par.setSpacingAfter(1);
-  par.setSpacingBefore(0);
-  return par;
-  }
-
-  function makeHeading(line) {
-    var p = body.appendParagraph(line);
-    applyBodyStyle(p);
-    var t = p.editAsText();
-    t.setBold(true);
-    t.setUnderline(true);
-    p.setSpacingBefore(1);
-    p.setSpacingAfter(1);
-    return p;
-  }
-
-  function makeCenteredHeader(line, isNameLine) {
-    var p = body.appendParagraph(line);
-    var t = p.editAsText();
-    t.setFontFamily(FONT).setFontSize(SIZE);
-    t.setBold(!!isNameLine);
-    p.setAlignment(DocumentApp.HorizontalAlignment.CENTER);
-    p.setSpacingAfter(isNameLine ? 2 : 8);
-    return p;
-  }
-
-  function makeBullet(line) {
-    var item = body.appendListItem(line);
-    item.clear(); // removes inherited styling influence
-    item.setGlyphType(DocumentApp.GlyphType.BULLET);
-    applyBodyStyle(item);
-    item.setIndentStart(18);
-    item.setIndentFirstLine(0);
-    return item;
-  }
-
-  function makeBoldLine(line) {
-    var p = body.appendParagraph(line);
-    applyBodyStyle(p);
-    p.editAsText().setBold(true);
-    return p;
-  }
-
-  // Parsing
-  var lines = (content || "").replace(/\r\n/g, "\n").split("\n");
-
-  // Very simple detection: first non-empty line = name, next 1–2 lines = contact
-  // You can tweak this if your CV format differs.
-  var i = 0;
-  while (i < lines.length && !lines[i].trim()) i++;
-
-  if (i < lines.length) {
-    makeCenteredHeader(lines[i].trim(), true); // Name
-    i++;
-  }
-
-  // Contact lines (up to 2 non-empty lines before first section heading)
-  var contactCount = 0;
-  while (i < lines.length && contactCount < 2) {
-    var s = lines[i].trim();
-    if (!s) { i++; continue; }
-
-    // Stop if we hit a section heading early
-    if (isSectionHeading(s)) break;
-
-    makeCenteredHeader(s, false);
-    contactCount++;
-    i++;
-  }
-
-  // Add a small spacer after header block
-  body.appendParagraph("");
-
-  var inExperience = false;
-
-  for (; i < lines.length; i++) {
-    var line = lines[i].trim();
-    if (!line) {
-      body.appendParagraph(""); // spacer
-      continue;
-    }
-
-    // Section headings
-    if (isSectionHeading(line)) {
-      inExperience = /^experience$/i.test(normalizeHeading(line));
-      makeHeading(line);
-      continue;
-    }
-
-    // Bullets
-    if (/^[-•]\s+/.test(line)) {
-      var bulletText = line.replace(/^[-•]\s+/, "").trim();
-      makeBullet(bulletText);
-      continue;
-    }
-
-    // Experience: role + dates bold (heuristic)
-    // Examples it catches:
-    // "Product Owner — NTT DATA (2022–2026)"
-    // "Senior Analyst | Company | 2021 - Present"
-    if (inExperience && looksLikeRoleDatesLine(line)) {
-      makeBoldLine(line);
-      continue;
-    }
-
-    // Normal paragraph
-    var p = body.appendParagraph(line);
-    applyBodyStyle(p);
-  }
+  String(content || "")
+    .replace(/\r\n/g, "\n")
+    .split(/\n{2,}/)
+    .forEach(function(paragraph) {
+      var text = paragraph.trim();
+      if (text) body.appendParagraph(text);
+    });
 
   doc.saveAndClose();
 
-  // Move to target folder
   if (folderId) {
     var file = DriveApp.getFileById(doc.getId());
-    var folder = DriveApp.getFolderById(folderId);
+    var folder = DriveApp.getFolderById(folderId.trim());
     file.moveTo(folder);
   }
 
   return doc.getUrl();
 }
 
-/* -------- helpers for headings / experience line detection -------- */
-
-function isSectionHeading(line) {
-  var h = normalizeHeading(line);
-  return (
-    h === "professional summary" ||
-    h === "summary" ||
-    h === "core skills" ||
-    h === "skills" ||
-    h === "experience" ||
-    h === "work experience" ||
-    h === "education" ||
-    h === "technical skills" ||
-    h === "projects" ||
-    h === "publications"
-  );
+function _escapeHtml(value) {
+  return String(value || "")
+    .replace(/&/g, "&amp;")
+    .replace(/</g, "&lt;")
+    .replace(/>/g, "&gt;")
+    .replace(/"/g, "&quot;")
+    .replace(/'/g, "&#39;");
 }
-
-function normalizeHeading(line) {
-  return String(line || "")
-    .replace(/[:\-–—]+$/g, "")
-    .replace(/\s+/g, " ")
-    .trim()
-    .toLowerCase();
-}
-
-function looksLikeRoleDatesLine(line) {
-  // Heuristics: line contains a year OR "Present" and is not too long
-  // and contains a separator often used for role/company lines.
-  var hasYearOrPresent = /(\b19\d{2}\b|\b20\d{2}\b|\bpresent\b)/i.test(line);
-  var hasSeparator = /[|–—\-•]/.test(line); // separators
-  var notTooLong = line.length <= 110;
-  return hasYearOrPresent && hasSeparator && notTooLong;
-}
-/* ---------- Helpers ---------- */
 
 function _jsonResponse(obj) {
   return ContentService
@@ -455,5 +493,9 @@ function _jsonResponse(obj) {
 }
 
 function _safeJsonParse(s) {
-  try { return JSON.parse(s); } catch (e) { return null; }
+  try {
+    return JSON.parse(s);
+  } catch (e) {
+    return null;
+  }
 }
